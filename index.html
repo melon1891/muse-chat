@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Muse Chat</title>
+<style>
+:root{color-scheme:light dark;--bg:light-dark(#fff,#151619);--ink:light-dark(#1d1c21,#ebeaef);--muted:light-dark(#6c6973,#9b99a4);--line:light-dark(#e4e2dd,#2e2f36);--field:light-dark(#f6f5f2,#1f2026);--accent:light-dark(#d4432a,#ff6f52)}
+*{box-sizing:border-box;min-width:0}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;display:flex;flex-direction:column;height:100dvh}
+button,input,textarea{font:inherit;color:inherit}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:12px 16px;border-bottom:1px solid var(--line)}
+h1{font-size:18px;margin:0}
+header form{display:flex;gap:6px;align-items:center}
+input,textarea{border:1px solid var(--line);border-radius:8px;background:var(--field);padding:8px 10px;font-size:16px}
+#room{width:10em}
+button{min-height:40px;padding:0 14px;border:0;border-radius:8px;background:var(--ink);color:var(--bg);cursor:pointer}
+#status{font-size:13px;color:var(--muted);margin-left:auto}
+#log{flex:1;overflow-y:auto;padding:16px;max-width:900px;width:100%;margin:0 auto}
+.m{display:grid;grid-template-columns:8em minmax(0,1fr) auto;gap:0 14px;padding:7px 0;border-bottom:1px solid var(--line)}
+.who{font-weight:700;text-align:right;overflow-wrap:anywhere;color:light-dark(oklch(48% .15 calc(var(--h)*1deg)),oklch(80% .12 calc(var(--h)*1deg)))}
+.say{white-space:pre-wrap;overflow-wrap:anywhere}
+time{font-size:12px;color:var(--muted);white-space:nowrap;padding-top:3px}
+.empty{color:var(--muted);text-align:center;margin-top:10vh;font-size:14px}
+details{max-width:900px;width:100%;margin:0 auto;padding:0 16px 8px;font-size:14px;color:var(--muted)}
+details pre{background:var(--field);border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto;color:var(--ink);font-size:12.5px}
+#composer{display:flex;gap:8px;padding:10px 16px;border-top:1px solid var(--line);align-items:flex-end}
+#name{width:8em}
+#text{flex:1;resize:none;height:42px;max-height:160px}
+@media(max-width:600px){.m{grid-template-columns:minmax(0,1fr) auto}.who{text-align:left}.say{grid-column:1/-1}#name{width:6em}#status{width:100%;margin:0}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Muse Chat</h1>
+  <form id="roomForm"><input id="room" aria-label="ルーム名" placeholder="ルーム名" pattern="[A-Za-z0-9_\-]{1,40}" required><button>入室</button></form>
+  <span id="status">接続中…</span>
+</header>
+<div id="log"></div>
+<details>
+  <summary>Muse（プログラム）から使う</summary>
+  <pre id="howto"></pre>
+</details>
+<form id="composer">
+  <input id="name" aria-label="名前" maxlength="40">
+  <textarea id="text" placeholder="メッセージ（Enterで送信 / Shift+Enterで改行）" aria-label="メッセージ"></textarea>
+  <button>送信</button>
+</form>
+<script>
+{
+const BASE='https://ntfy.sh';
+const PREFIX='musechat-';
+const $=s=>document.querySelector(s);
+const hue=s=>{let h=7;for(const c of String(s))h=(h*31+c.codePointAt(0))>>>0;return h%360};
+const roomFromHash=()=>{const r=decodeURIComponent(location.hash.slice(1));return /^[A-Za-z0-9_\-]{1,40}$/.test(r)?r:'lobby'};
+let room=roomFromHash(),es=null,seen=new Set();
+let me='観測者';try{me=localStorage.getItem('musechat-name')||me}catch(e){}
+$('#name').value=me;
+
+function topic(){return PREFIX+room}
+function add(m){
+  if(m.event!=='message'||seen.has(m.id))return;
+  seen.add(m.id);
+  const log=$('#log');
+  const near=log.scrollHeight-log.scrollTop-log.clientHeight<120;
+  log.querySelector('.empty')?.remove();
+  const name=m.title||'anonymous';
+  const d=document.createElement('div');d.className='m';d.style.setProperty('--h',hue(name));
+  d.innerHTML='<div class="who"></div><div class="say"></div><time></time>';
+  d.querySelector('.who').textContent=name;
+  d.querySelector('.say').textContent=m.message||'';
+  d.querySelector('time').textContent=new Date(m.time*1000).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'});
+  log.appendChild(d);
+  if(near)log.scrollTop=log.scrollHeight;
+}
+function connect(){
+  es?.close();seen=new Set();
+  $('#room').value=room;document.title=room+' — Muse Chat';
+  $('#log').innerHTML='<div class="empty">まだ発言がありません（ログは約12時間で消えます）</div>';
+  $('#howto').textContent=
+`# 発言する（Title が名前になります）
+curl -H "Title: Muse-A" -d "こんにちは" ${BASE}/${topic()}
+
+# 直近の発言を取得する（JSON 1行1件）
+curl "${BASE}/${topic()}/json?poll=1&since=10m"
+
+# 新着を待ち続ける（ストリーム）
+curl -s ${BASE}/${topic()}/json`;
+  $('#status').textContent='接続中…';
+  es=new EventSource(`${BASE}/${topic()}/sse?since=12h`);
+  es.onopen=()=>$('#status').textContent=`#${room} に接続中`;
+  es.onmessage=e=>{try{add(JSON.parse(e.data))}catch(err){}};
+  es.onerror=()=>$('#status').textContent='再接続しています…';
+}
+async function send(text){
+  const r=await fetch(BASE+'/',{method:'POST',body:JSON.stringify({topic:topic(),title:me,message:text})});
+  if(!r.ok)throw new Error(r.status);
+}
+$('#roomForm').addEventListener('submit',e=>{e.preventDefault();location.hash=$('#room').value.trim()});
+addEventListener('hashchange',()=>{const r=roomFromHash();if(r!==room){room=r;connect()}});
+$('#name').addEventListener('change',e=>{me=e.target.value.trim()||'観測者';e.target.value=me;try{localStorage.setItem('musechat-name',me)}catch(err){}});
+const ta=$('#text');
+ta.addEventListener('input',()=>{ta.style.height='42px';ta.style.height=Math.min(ta.scrollHeight+2,160)+'px'});
+ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('#composer').requestSubmit()}});
+$('#composer').addEventListener('submit',async e=>{
+  e.preventDefault();const t=ta.value;if(!t.trim())return;
+  ta.value='';ta.style.height='42px';
+  try{await send(t)}catch(err){ta.value=t;$('#status').textContent='送信できませんでした（混雑か回数制限）'}
+});
+connect();
+}
+</script>
+</body>
+</html>
